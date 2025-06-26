@@ -1,0 +1,220 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="/static/styles_dashboard.css" />
+    <style>
+      button {
+        padding: 4px 8px;
+        font-size: 1.1rem;
+        border-radius: 4px;
+        border: none;
+        cursor: pointer;
+        background-color: #27ae60;
+        color: white;
+        transition: background-color 0.3s ease;
+        min-width: 30px;
+        line-height: 1;
+      }
+      button:hover {
+        background-color: #1e8449;
+      }
+      span.actions button {
+        margin-left: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Public Notes Board</h2>
+    <ul id="public-file-list"></ul>
+
+    <h2>Upload File</h2>
+    <form id="upload-form">
+      <input type="file" id="file" required />
+      <label> <input type="checkbox" id="is-public" /> Public </label>
+      <button type="submit">Upload</button>
+    </form>
+
+    <h2>Your Files</h2>
+    <div class="search-section">
+      <input type="text" id="search-name" placeholder="Filename contains..." />
+      <button onclick="searchFiles()">Search</button>
+    </div>
+
+    <ul id="file-list"></ul>
+
+    <script>
+      const token = localStorage.getItem("token");
+
+      document.getElementById("upload-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const fileInput = document.getElementById("file");
+        const isPublic = document.getElementById("is-public").checked;
+        const formData = new FormData();
+        formData.append("file", fileInput.files[0]);
+        formData.append("is_public", isPublic);
+
+        const res = await fetch("http://localhost:8000/upload", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + token },
+          body: formData,
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert("Uploaded: " + data.filename);
+          searchFiles();
+          loadPublicFiles();
+        } else {
+          alert(data.detail || "Upload failed");
+        }
+      };
+
+      async function searchFiles() {
+        const name = document.getElementById("search-name").value;
+        const url = new URL("http://localhost:8000/files");
+        if (name) url.searchParams.append("name", name);
+
+        const res = await fetch(url.toString(), {
+          headers: { Authorization: "Bearer " + token },
+        });
+        const files = await res.json();
+        const list = document.getElementById("file-list");
+        list.innerHTML = "";
+
+        if (files.length === 0) {
+          list.innerHTML = "<li>No files found.</li>";
+          return;
+        }
+
+        files.forEach((file) => {
+          const item = document.createElement("li");
+          item.innerHTML = `
+            <span class="filename" title="${file.filename}">${file.filename}</span>
+            <span class="actions">
+              <button title="Download" onclick="downloadFile('${file.filename}')">📥</button>
+              <button title="Delete" onclick="confirmDeleteFile('${file.filename}')">❌</button>
+              <button title="Share" onclick="promptShareFile('${file.filename}')">🤝</button>
+              <button title="Toggle Public/Private" onclick="toggleVisibility('${file.filename}', ${!file.is_public})">
+                ${file.is_public ? "🔒" : "🌐"}
+              </button>
+            </span>
+          `;
+          list.appendChild(item);
+        });
+      }
+
+      async function loadPublicFiles() {
+        const res = await fetch("http://localhost:8000/public-files");
+        if (!res.ok) return;
+
+        const files = await res.json();
+        const list = document.getElementById("public-file-list");
+        list.innerHTML = "";
+
+        files.forEach((file) => {
+          const item = document.createElement("li");
+          item.innerHTML = `
+            <span class="filename" title="${file.filename}">${file.filename}</span>
+            <button title="Download" onclick="downloadFile('${file.filename}')">📥</button>
+          `;
+          list.appendChild(item);
+        });
+      }
+
+      async function downloadFile(filename) {
+        try {
+          const res = await fetch(`http://localhost:8000/files/${filename}`, {
+            headers: { Authorization: "Bearer " + token },
+          });
+          if (!res.ok) {
+            alert("Failed to download file");
+            return;
+          }
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+        } catch (error) {
+          alert("Error downloading file: " + error.message);
+        }
+      }
+
+      function confirmDeleteFile(filename) {
+        if (confirm(`Are you sure you want to delete "${filename}"?`)) {
+          deleteFile(filename);
+        }
+      }
+
+      async function deleteFile(filename) {
+        const res = await fetch(`http://localhost:8000/files/${filename}`, {
+          method: "DELETE",
+          headers: { Authorization: "Bearer " + token },
+        });
+        if (res.ok) {
+          alert("Deleted");
+          searchFiles();
+          loadPublicFiles();
+        } else {
+          alert(await res.text());
+        }
+      }
+
+      function promptShareFile(filename) {
+        const shareWith = prompt("Enter the username to share this file with:");
+        if (shareWith) {
+          shareFile(filename, shareWith);
+        }
+      }
+
+      async function shareFile(filename, shareWith) {
+        const res = await fetch("http://localhost:8000/files/share", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ filename, share_with_username: shareWith }),
+        });
+        if (res.ok) {
+          alert(`File '${filename}' shared with '${shareWith}'`);
+        } else {
+          const err = await res.json();
+          alert("Failed to share file: " + err.detail);
+        }
+      }
+
+      async function toggleVisibility(filename, makePublic) {
+        const res = await fetch(
+          "http://localhost:8000/files/toggle-visibility",
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer " + token,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ filename, make_public: makePublic }),
+          },
+        );
+
+        if (res.ok) {
+          alert(`File is now ${makePublic ? "public" : "private"}`);
+          searchFiles();
+          loadPublicFiles();
+        } else {
+          const err = await res.json();
+          alert("Failed to update visibility: " + err.detail);
+        }
+      }
+
+      window.onload = () => {
+        searchFiles();
+        loadPublicFiles();
+      };
+    </script>
+  </body>
+</html>
